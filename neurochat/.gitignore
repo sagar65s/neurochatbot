@@ -1,0 +1,32 @@
+# --- Environment secrets ---
+.env
+.env.local
+*.env
+!*.env.example
+!*.env.local.example
+
+# --- Firebase ---
+serviceAccountKey.json
+firebase-debug.log
+.firebase/
+
+# --- Backend (Python) ---
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/.pytest_cache/
+
+# --- Frontend (Node/Next.js) ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.DS_Store
+frontend/npm-debug.log*
+
+# --- Editors/OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

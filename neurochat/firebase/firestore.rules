@@ -1,0 +1,35 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only read/write their own user document
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Conversations: only the owner (matched by userId field) can access.
+    //
+    // NOTE: the backend's Firebase Admin SDK bypasses these rules entirely
+    // (that's normal and expected for a trusted server). These rules are a
+    // second line of defense in case anything ever calls Firestore
+    // directly from the client. The actual enforcement for all app traffic
+    // happens server-side in conversation_service.get_conversation_or_raise.
+    match /conversations/{conversationId} {
+      allow create: if request.auth != null
+                    && request.resource.data.userId == request.auth.uid;
+
+      allow read, update, delete: if request.auth != null
+                    && resource.data.userId == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow create: if request.auth != null
+                      && request.resource.data.userId == request.auth.uid
+                      && get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId == request.auth.uid;
+
+        allow read, update, delete: if request.auth != null
+                      && get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId == request.auth.uid;
+      }
+    }
+  }
+}
