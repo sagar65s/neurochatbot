@@ -1,8 +1,12 @@
-from fastapi import APIRouter
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
-router = APIRouter()
+app = FastAPI()
 
-
-@router.get("/api/health")
-async def health_check():
-    return {"status": "ok"}
+@app.get("/api/health")
+@app.head("/api/health")
+async def health():
+    return JSONResponse(
+        content={"status": "healthy"},
+        status_code=200
+    )
