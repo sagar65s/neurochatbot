@@ -31,18 +31,47 @@ function toAppUser(user: User): AppUser {
   };
 }
 
+/**
+ * Writes/merges the users/{uid} Firestore profile doc. This is a
+ * best-effort convenience mirror of the auth account — it is NOT
+ * required for the app to function (conversations are scoped by uid
+ * regardless of whether this doc exists). Deliberately never thrown from
+ * signUp/logIn/logInWithGoogle: if this write fails (a transient
+ * Firestore hiccup, a rules propagation delay right after account
+ * creation, etc.), the user should still be signed in and land on
+ * /chat — not see "Something went wrong" for a secondary write that has
+ * nothing to do with whether their account/login actually succeeded.
+ */
 async function ensureUserDoc(user: User) {
-  const ref = doc(db, "users", user.uid);
-  await setDoc(
-    ref,
-    {
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName ?? null,
-      createdAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
+  try {
+    const ref = doc(db, "users", user.uid);
+    await setDoc(
+      ref,
+      {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName ?? null,
+        createdAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("Non-fatal: failed to write user profile doc to Firestore.", err);
+  }
+}
+
+/**
+ * Sets the Firebase Auth display name. Same non-fatal reasoning as
+ * ensureUserDoc above — a failure here should never block sign-up.
+ */
+async function tryUpdateDisplayName(user: User, displayName: string) {
+  try {
+    await updateProfile(user, { displayName });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("Non-fatal: failed to set display name.", err);
+  }
 }
 
 function friendlyAuthError(code: string): string {
@@ -56,8 +85,8 @@ function friendlyAuthError(code: string): string {
     "auth/popup-closed-by-user": "Google sign-in was cancelled.",
     "auth/popup-blocked": "Your browser blocked the sign-in popup. Please allow popups for this site and try again.",
     "auth/too-many-requests": "Too many attempts. Please wait and try again.",
-    // These two are almost always a Firebase Console setup issue, not a
-    // code bug — surfacing the real cause here saves a lot of guessing.
+    // Almost always a Firebase Console setup issue, not a code bug —
+    // surfacing the real cause here saves a lot of guessing.
     "auth/operation-not-allowed":
       "Google sign-in isn't enabled for this project yet. In Firebase Console, go to Authentication > Sign-in method > Google, and enable it.",
     "auth/unauthorized-domain":
@@ -81,25 +110,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signUp(email: string, password: string, displayName?: string) {
     setError(null);
+    let cred;
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
-      if (displayName) {
-        await updateProfile(cred.user, { displayName });
-      }
-      await ensureUserDoc(cred.user);
-      // Set user state immediately rather than waiting for the
-      // onAuthStateChanged listener to fire. Without this, there's a
-      // race: router.push("/chat") right after signUp() can navigate
-      // before the context's `user` updates, so ProtectedRoute sees
-      // user=null for a moment and bounces back to /login — which looks
-      // like "signup needs two clicks" even though the account was
-      // created successfully on the first click.
-      setUser(toAppUser(cred.user));
+      // Only the actual account-creation call can fail this signup —
+      // everything after this point (display name, Firestore profile
+      // doc) is best-effort and non-fatal, so a secondary hiccup there
+      // never surfaces as "Something went wrong" for a signup that
+      // actually succeeded.
+      cred = await createUserWithEmailAndPassword(auth, email, password);
     } catch (err: any) {
       const msg = friendlyAuthError(err?.code ?? "");
       setError(msg);
       throw new Error(msg);
     }
+
+    if (displayName) {
+      await tryUpdateDisplayName(cred.user, displayName);
+    }
+    await ensureUserDoc(cred.user);
+
+    // Set user state immediately rather than waiting for the
+    // onAuthStateChanged listener to fire. Without this, there's a race:
+    // router.push("/chat") right after signUp() can navigate before the
+    // context's `user` updates, so ProtectedRoute sees user=null for a
+    // moment and bounces back to /login.
+    setUser(toAppUser(cred.user));
   }
 
   async function logIn(email: string, password: string) {
@@ -116,16 +151,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function logInWithGoogle() {
     setError(null);
+    let cred;
     try {
       const provider = new GoogleAuthProvider();
-      const cred = await signInWithPopup(auth, provider);
-      await ensureUserDoc(cred.user);
-      setUser(toAppUser(cred.user)); // see note in signUp() above
+      cred = await signInWithPopup(auth, provider);
     } catch (err: any) {
       const msg = friendlyAuthError(err?.code ?? "");
       setError(msg);
       throw new Error(msg);
     }
+
+    // Same reasoning as signUp() above — the popup sign-in itself
+    // succeeded, so a Firestore profile-write hiccup must not block it.
+    await ensureUserDoc(cred.user);
+    setUser(toAppUser(cred.user));
   }
 
   async function logOut() {
